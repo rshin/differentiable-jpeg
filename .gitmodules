@@ -1,3 +1,6 @@
 [submodule "models"]
 	path = models
 	url = https://github.com/tensorflow/models
+[submodule "cleverhans"]
+	path = cleverhans_git
+	url = https://github.com/tensorflow/cleverhans
