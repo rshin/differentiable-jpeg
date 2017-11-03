@@ -12,11 +12,12 @@ import tensorflow as tf
 import tqdm
 
 sys.path.insert(0, 'slim')
-
 import cleverhans.attacks
 import cleverhans.model
 from nets import nets_factory
 from preprocessing import preprocessing_factory
+
+import jpeg
 
 def make_network_fn(network_fn, input_shape, output_shape):
 
@@ -101,6 +102,11 @@ def jpeg_defense(images, quality):
   return tf.py_func(fn, [images, quality], [tf.float32], stateful=False)[0]
 
 
+def differentiable_jpeg(image, quality):
+  return jpeg.jpeg_compress_decompress(
+      image, rounding=jpeg.diff_round, factor=jpeg.quality_to_factor(quality))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--model-name')
@@ -126,14 +132,17 @@ if __name__ == '__main__':
   logits_fn = make_network_fn(lambda image: network_fn(normalization_fn(image)),
       [None, image_size, image_size, 3], [None, num_classes])
   pred_fn = lambda image: tf.argmax(logits_fn(image), axis=1)
+
   ch_model = cleverhans.model.CallableModelWrapper(logits_fn, 'logits')
+  ch_jpeg_model = cleverhans.model.CallableModelWrapper(
+      lambda image: logits_fn(differentiable_jpeg(image, 25)), 'logits')
 
   image_ph = tf.placeholder(tf.float32, [None, image_size, image_size, 3])
   y_pred = {
       'orig': pred_fn(image_ph),
       'orig-25': pred_fn(jpeg_defense(image_ph, 25)),
-      'orig-50': pred_fn(jpeg_defense(image_ph, 50)),
-      'orig-75': pred_fn(jpeg_defense(image_ph, 75)),
+#      'orig-50': pred_fn(jpeg_defense(image_ph, 50)),
+#      'orig-75': pred_fn(jpeg_defense(image_ph, 75)),
   }
 
   model_vars = tf.contrib.framework.get_variables_to_restore()
@@ -149,9 +158,17 @@ if __name__ == '__main__':
   y_pred.update({
     'attack': pred_fn(x_attack),
     'attack-25': pred_fn(jpeg_defense(x_attack, 25)),
-    'attack-50': pred_fn(jpeg_defense(x_attack, 50)),
-    'attack-75': pred_fn(jpeg_defense(x_attack, 75)),
+#    'attack-50': pred_fn(jpeg_defense(x_attack, 50)),
+#    'attack-75': pred_fn(jpeg_defense(x_attack, 75)),
   })
+
+  jpeg_attack = cleverhans.attacks.FastGradientMethod(ch_jpeg_model)
+  x_jpeg_attack = jpeg_attack.generate(image_ph, clip_min=0, clip_max=255, eps=3)
+  y_pred.update({
+    'jpeg-attack': pred_fn(x_jpeg_attack),
+    'jpeg-attack-25': pred_fn(jpeg_defense(x_jpeg_attack, 25)),
+  })
+
 
   count = 0
   correct = {k: 0 for k in y_pred}
@@ -163,9 +180,10 @@ if __name__ == '__main__':
   batch_size = 32
   for labels, images in itertools.izip(
       batch(all_labels, batch_size), batch(tqdm.tqdm(all_images), batch_size)):
-    y = sess.run(y_pred, {image_ph: images})
-    for k, v in y.iteritems():
-      correct[k] += sum(v == labels)
+    #y = sess.run(y_pred, {image_ph: images})
+    for name, pred in y_pred.iteritems():
+      y = sess.run(pred, {image_ph: images})
+      correct[name] += sum(y == labels)
     count += len(images)
 
   print correct
