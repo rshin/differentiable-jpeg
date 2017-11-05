@@ -59,6 +59,35 @@ def variables_on_cpu(var_device, other_device):
   return device_function
 
 
+def min_grad(grad_loss_fns):
+  def f(images, labels):
+    grads, losses = zip(*[fn(images, labels) for fn in grad_loss_fns])
+    return np.array(grads)[np.argmin(losses, axis=0), range(images.shape[0])]
+  return f
+
+
+def soft_min_grad(grad_loss_fns):
+  def f(images, labels):
+    grads, losses = zip(*[fn(images, labels) for fn in grad_loss_fns])
+    exp_losses = np.exp(losses - np.max(losses, axis=0, keepdims=True))
+    weights = 1 - exp_losses / np.sum(exp_losses, axis=0, keepdims=True)
+    return np.sum(
+        [
+            grad * weight.reshape(-1, 1, 1, 1)
+            for grad, weight in zip(grads, weights)
+        ],
+        axis=0)
+  return f
+
+
+def avg_grad(grad_loss_fns):
+  def f(images, labels):
+    grads, losses = zip(*[fn(images, labels) for fn in grad_loss_fns])
+    return np.mean(grads, axis=0)
+  return f
+
+
+
 def make_network_fn(network_fn, input_shape, output_shape):
 
   def fn(images):
@@ -210,7 +239,7 @@ if __name__ == '__main__':
                            eps=eps,
                            eps_iter=eps_iter,
                            nb_iter=nb_iter))
-                      for eps in [128., 256., 512.,]
+                      for eps in [512., 1024., 2048.]
                       for nb_iter in [10, 20]
                       for eps_iter in [eps / nb_iter * 2, eps / nb_iter]])
   #attack_defs.update([('iter-l2-{}'.format(eps), functools.partial(
@@ -260,6 +289,15 @@ if __name__ == '__main__':
   else:
     output = args.output
 
+  all_grad_loss_fns = [functools.partial(grad_loss_fn, i)
+                       for i, _ in enumerate(defenses.keys())]
+  defense_names = ','.join(defenses.keys())
+  all_defenses = [
+      #('min {}'.format(defense_names), min_grad(all_grad_loss_fns)),
+      ('softmin {}'.format(defense_names), soft_min_grad(all_grad_loss_fns)),
+      ('avg {}'.format(defense_names), avg_grad(all_grad_loss_fns)),
+  ]
+
   metric_names = ['l2', 'norm_l2', 'linf']
   with open(output, 'w') as f:
     writer = csv.writer(f)
@@ -270,10 +308,8 @@ if __name__ == '__main__':
     writer.writerow(header)
 
     batch_size = args.batch_size
-    for def_i, def_name in enumerate(defenses.keys()):
-      grad_fn_partial = functools.partial(grad_fn, def_i)
-
-      for attack_name, attack in attack_defs.items():
+    for attack_name, attack in attack_defs.items():
+      for def_name, grad_fn_partial in all_defenses:
         if attack_name == 'none' and def_name != 'none':
           continue
 
