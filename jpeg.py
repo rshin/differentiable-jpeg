@@ -42,10 +42,10 @@ def downsampling_420(image):
       cb, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
   cr = tf.nn.avg_pool(
       cr, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
-  return tf.squeeze(
+  return (tf.squeeze(
       y, axis=-1), tf.squeeze(
           cb, axis=-1), tf.squeeze(
-              cr, axis=-1)
+              cr, axis=-1))
 
 
 # 3. Block splitting
@@ -286,15 +286,13 @@ def jpeg_compress_decompress(image,
 
 
 def diff_round(x):
-    return tf.round(x) + (x - tf.round(x))**3
+  return tf.round(x) + (x - tf.round(x))**3
+
 def round_only_at_0(x):
-    cond = tf.cast(tf.abs(x) < 0.5, tf.float32)
-    return cond * (x ** 3) + (1 - cond) * x
+  cond = tf.cast(tf.abs(x) < 0.5, tf.float32)
+  return cond * (x ** 3) + (1 - cond) * x
 
 def quality_to_factor(quality):
-    if quality < 50:
-        quality = 5000. / quality
-    else:
-        quality = 200. - quality*2
-    return quality / 100.
-
+  return tf.cond(
+      tf.less(quality, 50), lambda: 5000. / quality,
+      lambda: 200. - quality * 2) / 100
