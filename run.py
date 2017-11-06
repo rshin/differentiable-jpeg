@@ -86,6 +86,9 @@ def avg_grad(grad_loss_fns):
     return np.mean(grads, axis=0)
   return f
 
+def filter_dict(d, regex):
+  return collections.OrderedDict((k, v) for k, v in d.items() if
+      re.search(regex, k) is not None)
 
 
 def make_network_fn(network_fn, input_shape, output_shape):
@@ -96,43 +99,6 @@ def make_network_fn(network_fn, input_shape, output_shape):
     return logits
 
   return fn
-
-
-'''
-def make_network_fn(network_fn, input_shape, output_shape):
-
-  @function.Defun(tf.float32, tf.float32, shape_func=lambda _: [input_shape])
-  def fn_grad(images, grad_logits):
-    images.set_shape(input_shape)
-    grad_logits.set_shape(output_shape)
-    #with tf.device('/cpu:0'):
-    #  grad_logits = tf.identity(grad_logits)
-    #  images = tf.Print(images, [tf.shape(images)], 'images shape: ',
-    #      summarize=9999)
-    #  grad_logits = tf.Print(grad_logits, [tf.shape(grad_logits)], 'grad_logits shape: ', summarize=9999)
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
-      logits, _  = network_fn(images)
-    return tf.gradients(ys=[logits], xs=[images], grad_ys=[grad_logits])
-
-  # Can't use fn_grad directly because of a bug:
-  # fn has images + as many inputs as the number of variables used inside.
-  # fn_grad gets images + variables + grad_logits as input.
-  # So the grad_logits argument is set to the first variable.
-  def fn_py_grad(op, grad_logits):
-    return [fn_grad(op.inputs[0], grad_logits)] + [tf.zeros_like(inp) for inp in
-      op.inputs[1:]]
-
-  @function.Defun(tf.float32, python_grad_func=fn_py_grad, shape_func=lambda _: [output_shape])
-  #@function.Defun(tf.float32, shape_func=lambda _: [output_shape])
-  def fn(images):
-    images.set_shape(input_shape)
-    logits, _ = network_fn(images)
-    #logits = tf.Print(logits, [tf.shape(logits)], 'logits shape: ',
-    #    summarize=9999)
-    return logits
-
-  return fn
-'''
 
 
 if __name__ == '__main__':
@@ -140,9 +106,9 @@ if __name__ == '__main__':
   parser.add_argument('--model-name')
   parser.add_argument('--checkpoint')
   parser.add_argument('--limit', type=int)
-  parser.add_argument('--attacks', default='.*')
-  parser.add_argument('--targets', default='.*')
-  parser.add_argument('--models', default='.*')
+  parser.add_argument('--attacks', default='.')
+  parser.add_argument('--targets', default='.')
+  parser.add_argument('--models', default='.')
   parser.add_argument('--batch-size', default=25, type=int)
   parser.add_argument('--output')
   args = parser.parse_args()
@@ -204,12 +170,14 @@ if __name__ == '__main__':
   grads, = tf.gradients(ys=[loss], xs=[image_ph])
 
   eval_defenses = collections.OrderedDict([
-      ('none', lambda x: x),
+  #    ('none', lambda x: x),
       ('round', tf.round),
       ('jpeg-def-25', functools.partial(utils.jpeg_defense_tf, quality=25)),
       ('jpeg-def-50', functools.partial(utils.jpeg_defense, quality=50)),
       ('jpeg-def-75', functools.partial(utils.jpeg_defense_tf, quality=75)),
   ])
+  eval_defenses = filter_dict(eval_defenses, args.models)
+
   eval_choice_ph = tf.placeholder(tf.int32, [])
   eval_images = tf.case(
       [(tf.equal(eval_choice_ph, i), lambda d=defense: d(image_ph))
@@ -219,19 +187,19 @@ if __name__ == '__main__':
 
   attack_defs = collections.OrderedDict()
   attack_defs['none'] = lambda x, *args, **kwargs: x
-  #attack_defs.update([('fgm-inf-{}'.format(eps), functools.partial(
-  #    attacks.fgm, ord=np.inf, eps=eps, eps_iter=eps, nb_iter=1))
-  #                    for eps in [1, 3, 5]])
-  #attack_defs.update([('fgm-l2-{}'.format(eps), functools.partial(
-  #    attacks.fgm, ord=2, eps=eps, eps_iter=eps, nb_iter=1))
-  #                    for eps in [1, 3, 5]])
-  #attack_defs.update([('iter-inf-{}-{}-{}'.format(eps, eps / 10., 10),
-  #                     functools.partial(
-  #                         attacks.fgm,
-  #                         ord=np.inf,
-  #                         eps=eps,
-  #                         eps_iter=eps / 10.,
-  #                         nb_iter=10)) for eps in [1, 3, 5]])
+  attack_defs.update([('fgm-inf-{}'.format(eps), functools.partial(
+      attacks.fgm, ord=np.inf, eps=eps, eps_iter=eps, nb_iter=1))
+                      for eps in [1, 3, 5, 7, 9]])
+  attack_defs.update([('fgm-l2-{}'.format(eps), functools.partial(
+      attacks.fgm, ord=2, eps=eps, eps_iter=eps, nb_iter=1))
+                      for eps in [1, 3, 5]])
+  attack_defs.update([('iter-inf-{}-{}-{}'.format(eps, eps / 10., 10),
+                       functools.partial(
+                           attacks.fgm,
+                           ord=np.inf,
+                           eps=eps,
+                           eps_iter=eps / 10.,
+                           nb_iter=10)) for eps in [1, 3, 5]])
   attack_defs.update([('iter-l2-{}-{}-{}'.format(eps, eps_iter, nb_iter),
                        functools.partial(
                            attacks.fgm,
@@ -242,9 +210,8 @@ if __name__ == '__main__':
                       for eps in [512., 1024., 2048.]
                       for nb_iter in [10, 20]
                       for eps_iter in [eps / nb_iter * 2, eps / nb_iter]])
-  #attack_defs.update([('iter-l2-{}'.format(eps), functools.partial(
-  #    attacks.fgm, ord=2, eps=eps, eps_iter=eps / 5., nb_iter=10))
-  #                    for eps in [1, 3, 5]])
+  attack_defs = filter_dict(attack_defs, args.attacks)
+
 
   #ch_fgm = cleverhans.attacks.FastGradientMethod(
   #    cleverhans.model.CallableModelWrapper(logits_fn, 'logits'))
@@ -283,20 +250,25 @@ if __name__ == '__main__':
   all_images = [utils.load_image(fn, image_size) for fn in tqdm.tqdm(fns)]
 
   if args.output is None:
-    #output = 'results/attacks={},targets={},models={},{}.csv'.format(
-    #    args.attacks, args.targets, args.models, int(time.time()))
-    output = 'results/{}.csv'.format(int(time.time()))
+    output = 'results/attacks={},targets={},models={},{}.csv'.format(
+        args.attacks, args.targets, args.models, int(time.time()))
+    #output = 'results/{}.csv'.format(int(time.time()))
   else:
     output = args.output
 
   all_grad_loss_fns = [functools.partial(grad_loss_fn, i)
                        for i, _ in enumerate(defenses.keys())]
   defense_names = ','.join(defenses.keys())
-  all_defenses = [
-      #('min {}'.format(defense_names), min_grad(all_grad_loss_fns)),
+  all_defenses = collections.OrderedDict([
+      ('min {}'.format(defense_names), min_grad(all_grad_loss_fns)),
       ('softmin {}'.format(defense_names), soft_min_grad(all_grad_loss_fns)),
       ('avg {}'.format(defense_names), avg_grad(all_grad_loss_fns)),
-  ]
+      ('none', functools.partial(grad_fn, 0)),
+      ('jpeg-25', functools.partial(grad_fn, 1)),
+      ('jpeg-50', functools.partial(grad_fn, 2)),
+      ('jpeg-75', functools.partial(grad_fn, 3)),
+  ])
+  all_defenses = filter_dict(all_defenses, args.targets)
 
   metric_names = ['l2', 'norm_l2', 'linf']
   with open(output, 'w') as f:
@@ -309,7 +281,7 @@ if __name__ == '__main__':
 
     batch_size = args.batch_size
     for attack_name, attack in attack_defs.items():
-      for def_name, grad_fn_partial in all_defenses:
+      for def_name, grad_fn_partial in all_defenses.items():
         if attack_name == 'none' and def_name != 'none':
           continue
 
