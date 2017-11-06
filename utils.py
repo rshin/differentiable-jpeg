@@ -34,10 +34,10 @@ normalization_fn_map = {
     'resnet_v1_101': vgg_normalization,
     'resnet_v1_152': vgg_normalization,
     'resnet_v1_200': vgg_normalization,
-    'resnet_v2_50': vgg_normalization,
-    'resnet_v2_101': vgg_normalization,
-    'resnet_v2_152': vgg_normalization,
-    'resnet_v2_200': vgg_normalization,
+    'resnet_v2_50': inception_normalization,
+    'resnet_v2_101': inception_normalization,
+    'resnet_v2_152': inception_normalization,
+    'resnet_v2_200': inception_normalization,
     'vgg': vgg_normalization,
     'vgg_a': vgg_normalization,
     'vgg_16': vgg_normalization,
@@ -108,7 +108,27 @@ def differentiable_jpeg(image, quality):
 
 def create_model(name):
   offset = {
-      'inception_resnet_v2': 1,
+    'inception': 1,
+    'inception_v1': 1,
+    'inception_v2': 1,
+    'inception_v3': 1,
+    'inception_v4': 1,
+    'inception_resnet_v2': 1,
+    'mobilenet_v1': 1,
+    'nasnet_mobile': 1,
+    'nasnet_large': 1,
+    'resnet_v1_50': 0,
+    'resnet_v1_101': 0,
+    'resnet_v1_152': 0,
+    'resnet_v1_200': 0,
+    'resnet_v2_50': 1,
+    'resnet_v2_101': 1,
+    'resnet_v2_152': 1,
+    'resnet_v2_200': 1,
+    'vgg': 0,
+    'vgg_a': 0,
+    'vgg_16': 0,
+    'vgg_19': 0,
   }[name]
   num_classes = 1000 + offset
 
