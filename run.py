@@ -80,11 +80,33 @@ def soft_min_grad(grad_loss_fns):
   return f
 
 
+def max_grad(grad_loss_fns):
+  def f(images, labels):
+    grads, losses = zip(*[fn(images, labels) for fn in grad_loss_fns])
+    return np.array(grads)[np.argmax(losses, axis=0), range(images.shape[0])]
+  return f
+
+
+def soft_max_grad(grad_loss_fns):
+  def f(images, labels):
+    grads, losses = zip(*[fn(images, labels) for fn in grad_loss_fns])
+    exp_losses = np.exp(losses - np.max(losses, axis=0, keepdims=True))
+    weights = exp_losses / np.sum(exp_losses, axis=0, keepdims=True)
+    return np.sum(
+        [
+            grad * weight.reshape(-1, 1, 1, 1)
+            for grad, weight in zip(grads, weights)
+        ],
+        axis=0)
+  return f
+
+
 def avg_grad(grad_loss_fns):
   def f(images, labels):
     grads, losses = zip(*[fn(images, labels) for fn in grad_loss_fns])
     return np.mean(grads, axis=0)
   return f
+
 
 def filter_dict(d, regex):
   return collections.OrderedDict((k, v) for k, v in d.items() if
@@ -110,8 +132,10 @@ if __name__ == '__main__':
   parser.add_argument('--targets', default='.')
   parser.add_argument('--models', default='.')
   parser.add_argument('--batch-size', default=25, type=int)
+  parser.add_argument('--mode', default='untargeted')
   parser.add_argument('--output')
   args = parser.parse_args()
+  assert args.mode in ('targeted', 'untargeted')
 
   tf.get_variable_scope()._reuse = tf.AUTO_REUSE
 
@@ -173,7 +197,7 @@ if __name__ == '__main__':
   #    ('none', lambda x: x),
       ('round', tf.round),
       ('jpeg-def-25', functools.partial(utils.jpeg_defense_tf, quality=25)),
-      ('jpeg-def-50', functools.partial(utils.jpeg_defense, quality=50)),
+      ('jpeg-def-50', functools.partial(utils.jpeg_defense_tf, quality=50)),
       ('jpeg-def-75', functools.partial(utils.jpeg_defense_tf, quality=75)),
   ])
   eval_defenses = filter_dict(eval_defenses, args.models)
@@ -199,7 +223,8 @@ if __name__ == '__main__':
                            ord=np.inf,
                            eps=eps,
                            eps_iter=eps / 10.,
-                           nb_iter=10)) for eps in [1, 3, 5]])
+                           #nb_iter=10)) for eps in [1, 3, 5, 7, 9]])
+                           nb_iter=10)) for eps in [9, 7, 5, 3, 1]])
   attack_defs.update([('iter-l2-{}-{}-{}'.format(eps, eps_iter, nb_iter),
                        functools.partial(
                            attacks.fgm,
@@ -250,8 +275,9 @@ if __name__ == '__main__':
   all_images = [utils.load_image(fn, image_size) for fn in tqdm.tqdm(fns)]
 
   if args.output is None:
-    output = 'results/attacks={},targets={},models={},{}.csv'.format(
-        args.attacks, args.targets, args.models, int(time.time()))
+    output = 'results/net={},mode={},attacks={},targets={},models={},limit={},{}.csv'.format(
+        args.model_name, args.mode, args.attacks, args.targets, args.models, args.limit,
+        int(time.time()))
     #output = 'results/{}.csv'.format(int(time.time()))
   else:
     output = args.output
@@ -259,15 +285,27 @@ if __name__ == '__main__':
   all_grad_loss_fns = [functools.partial(grad_loss_fn, i)
                        for i, _ in enumerate(defenses.keys())]
   defense_names = ','.join(defenses.keys())
-  all_defenses = collections.OrderedDict([
-      ('min {}'.format(defense_names), min_grad(all_grad_loss_fns)),
-      ('softmin {}'.format(defense_names), soft_min_grad(all_grad_loss_fns)),
-      ('avg {}'.format(defense_names), avg_grad(all_grad_loss_fns)),
-      ('none', functools.partial(grad_fn, 0)),
-      ('jpeg-25', functools.partial(grad_fn, 1)),
-      ('jpeg-50', functools.partial(grad_fn, 2)),
-      ('jpeg-75', functools.partial(grad_fn, 3)),
-  ])
+  if args.mode == 'targeted':
+    all_defenses = collections.OrderedDict([
+        ('max {}'.format(defense_names), max_grad(all_grad_loss_fns)),
+        ('softmax {}'.format(defense_names), soft_max_grad(all_grad_loss_fns)),
+        ('avg {}'.format(defense_names), avg_grad(all_grad_loss_fns)),
+        ('none', functools.partial(grad_fn, 0)),
+        ('jpeg-25', functools.partial(grad_fn, 1)),
+        ('jpeg-50', functools.partial(grad_fn, 2)),
+        ('jpeg-75', functools.partial(grad_fn, 3)),
+    ])
+  elif args.mode == 'untargeted':
+    all_defenses = collections.OrderedDict([
+        ('min {}'.format(defense_names), min_grad(all_grad_loss_fns)),
+        ('softmin {}'.format(defense_names), soft_min_grad(all_grad_loss_fns)),
+        ('avg {}'.format(defense_names), avg_grad(all_grad_loss_fns)),
+        ('none', functools.partial(grad_fn, 0)),
+        ('jpeg-25', functools.partial(grad_fn, 1)),
+        ('jpeg-50', functools.partial(grad_fn, 2)),
+        ('jpeg-75', functools.partial(grad_fn, 3)),
+    ])
+
   all_defenses = filter_dict(all_defenses, args.targets)
 
   metric_names = ['l2', 'norm_l2', 'linf']
@@ -292,10 +330,14 @@ if __name__ == '__main__':
         for labels, images in itertools.izip(
             utils.batch(all_labels, batch_size),
             utils.batch(tqdm.tqdm(all_images), batch_size)):
-
           images = np.array(images)
+          labels = np.array(labels)
+          if args.mode == 'targeted':
+            labels = (labels - offset + 500) % 1000 + offset
+
           attacked_images = attack(
-              images, labels, grad_fn_partial, clip_min=0, clip_max=255)
+              images, labels, grad_fn_partial, clip_min=0, clip_max=255,
+              targeted=args.mode == 'targeted')
 
           orig_l2_norm = attacks.batchwise_norm_np(images, 2) / 255
           diff_l2_norm = attacks.batchwise_norm_np(images - attacked_images,

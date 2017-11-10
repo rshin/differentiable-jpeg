@@ -13,7 +13,7 @@ def batchwise_norm_np(x, ord):
 
 
 def fgm(images, labels, backward,
-    ord, eps, eps_iter, nb_iter, clip_min, clip_max):
+    ord, eps, eps_iter, nb_iter, clip_min, clip_max, targeted):
   orig_images = images
   images = np.copy(orig_images)
 
@@ -27,7 +27,10 @@ def fgm(images, labels, backward,
 
     # Take eps_iter step
     grad_images *= eps_iter
-    images += grad_images
+    if targeted:
+      images -= grad_images
+    else:
+      images += grad_images
 
     # Ensure |images - orig_images| < eps
     factor = np.maximum(batchwise_norm_np(images - orig_images, ord) / eps, 1)
